@@ -1,0 +1,267 @@
+@echo off
+setlocal ENABLEDELAYEDEXPANSION
+
+REM =====================================================
+REM ======================= CONFIG ======================
+REM =====================================================
+REM Ruta a TU script original (no se renombra):
+set "SRC_APP=C:\Users\d8204\Desktop\descarga de musica\app.py"
+
+REM Icono (opcional). Si existe, se usará; si no, no pasa nada.
+set "SRC_ICON=C:\Users\d8204\Desktop\descarga de musica\logo.ico"
+
+REM FFmpeg del sistema (si quieres usarlo sin empaquetarlo)
+set "FFMPEG_DIR=C:\Program Files\ffmpeg-2025-08-14-git-cdbb5f1b93-full_build\bin"
+
+REM 0 = usar FFmpeg del sistema; 1 = empaquetar ffmpeg.exe dentro del instalador (portable)
+set "EMBED_FFMPEG=0"
+
+REM Datos de la app
+set "APPNAME=YouTube Downloader 2.0"
+set "APPPUBLISHER=TuNombre"
+set "APPVERSION=2.0.0"
+
+REM Rutas del proyecto (se crearán)
+set "PROJECT_ROOT=C:\YTDownloader"
+set "SRC_DIR=%PROJECT_ROOT%\src"
+set "ASSETS_DIR=%PROJECT_ROOT%\assets"
+set "BIN_DIR=%PROJECT_ROOT%\bin"
+set "BUILD_DIR=%PROJECT_ROOT%\build\pyi"
+set "DIST_DIR=%PROJECT_ROOT%\dist"
+set "INSTALLER_DIR=%PROJECT_ROOT%\installer"
+set "INSTALLER_OUT=%INSTALLER_DIR%\dist_installer"
+
+REM =====================================================
+REM =================== PREPARACIÓN =====================
+REM =====================================================
+echo === Preparando carpetas del proyecto ===
+for %%D in ("%PROJECT_ROOT%" "%SRC_DIR%" "%ASSETS_DIR%" "%BIN_DIR%" "%BUILD_DIR%" "%DIST_DIR%" "%INSTALLER_DIR%" "%INSTALLER_OUT%") do (
+  if not exist "%%~D" mkdir "%%~D"
+)
+
+echo [DEBUG] SRC_APP   = "%SRC_APP%"
+echo [DEBUG] SRC_ICON  = "%SRC_ICON%"
+echo [DEBUG] PROJECT_ROOT = "%PROJECT_ROOT%"
+
+if not exist "%SRC_APP%" (
+  echo [ERROR] No existe el archivo fuente: "%SRC_APP%"
+  echo Corrige SRC_APP al principio del BAT.
+  pause & exit /b 1
+)
+
+REM Copiar app.py conservando nombre
+for %%F in ("%SRC_APP%") do set "APP_BASENAME=%%~nxF"
+copy /Y "%SRC_APP%" "%SRC_DIR%\%APP_BASENAME%" >nul
+if errorlevel 1 (echo [ERROR] No se pudo copiar "%SRC_APP%" & pause & exit /b 1)
+echo [OK] Copiado "%APP_BASENAME%" a "%SRC_DIR%"
+
+REM Copiar icono si existe
+set "ICON_PATH="
+if exist "%SRC_ICON%" (
+  for %%I in ("%SRC_ICON%") do set "ICON_BASENAME=%%~nxI"
+  copy /Y "%SRC_ICON%" "%ASSETS_DIR%\%ICON_BASENAME%" >nul
+  if errorlevel 1 (echo [ERROR] No se pudo copiar el icono & pause & exit /b 1)
+  set "ICON_PATH=%ASSETS_DIR%\%ICON_BASENAME%"
+  echo [OK] Copiado icono "%ICON_BASENAME%" a "%ASSETS_DIR%"
+) else (
+  echo [INFO] No se ha encontrado icono (SRC_ICON). Continuo sin icono.
+)
+
+REM FFmpeg: elegir modo
+if "%EMBED_FFMPEG%"=="1" (
+  echo [INFO] Modo portable: empaquetar ffmpeg.exe en el instalador.
+  if exist "%FFMPEG_DIR%\ffmpeg.exe" (
+    copy /Y "%FFMPEG_DIR%\ffmpeg.exe" "%BIN_DIR%\ffmpeg.exe" >nul
+    if errorlevel 1 (echo [ERROR] No se pudo copiar ffmpeg.exe a BIN & pause & exit /b 1)
+    echo [OK] Copiado ffmpeg.exe a "%BIN_DIR%"
+  ) else (
+    if not exist "%BIN_DIR%\ffmpeg.exe" (
+      echo [ADVERTENCIA] No encuentro ffmpeg.exe ni en FFMPEG_DIR ni en BIN. Puedes copiarlo luego a "%BIN_DIR%\ffmpeg.exe".
+    )
+  )
+) else (
+  echo [INFO] Modo sistema: usar FFmpeg instalado (no se empaqueta).
+  if exist "%FFMPEG_DIR%\ffmpeg.exe" (
+    set "PATH=%FFMPEG_DIR%;%PATH%"
+    echo [OK] Se añadio FFmpeg al PATH de esta sesion: "%FFMPEG_DIR%"
+  ) else (
+    echo [ADVERTENCIA] No veo ffmpeg.exe en "%FFMPEG_DIR%". Si tu app necesita postprocesado MP3/MP4, asegúrate de tener FFmpeg en PATH.
+  )
+)
+
+echo.
+echo === Contenido tras copias ===
+echo SRC:      & dir /b "%SRC_DIR%"
+echo ASSETS:   & dir /b "%ASSETS_DIR%"
+echo BIN:      & dir /b "%BIN_DIR%"
+echo.
+
+REM =====================================================
+REM =================== ENTORNO PY ======================
+REM =====================================================
+echo === Creando/activando venv ===
+if not exist "%PROJECT_ROOT%\.venv" (
+  py -m venv "%PROJECT_ROOT%\.venv"
+  if errorlevel 1 (echo [ERROR] No se pudo crear venv & pause & exit /b 1)
+)
+call "%PROJECT_ROOT%\.venv\Scripts\activate"
+python -m pip install --upgrade pip
+
+echo === Instalando dependencias (si faltan) ===
+pip show pyinstaller >nul 2>&1 || pip install "pyinstaller>=6.4"
+pip show PySide6 >nul 2>&1    || pip install PySide6 PySide6-Addons PySide6-Essentials
+pip show yt-dlp  >nul 2>&1    || pip install yt-dlp
+
+REM =====================================================
+REM ================== COMPILAR .EXE ====================
+REM =====================================================
+set "ICONARG="
+if defined ICON_PATH set "ICONARG=--icon ""%ICON_PATH%"""
+
+REM PySide6+WebEngine: recolectar recursos/DLLs necesarios
+set "QT_COLLECT=--collect-all PySide6 --collect-all PySide6.QtWebEngineWidgets --collect-all PySide6.QtWebEngineCore --collect-all PySide6.QtQuick"
+set "QT_HIDDEN=--hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import PySide6.QtPrintSupport"
+
+REM Empaquetado de bin\ (solo si EMBED_FFMPEG=1 y existe bin)
+set "ADD_DATA="
+if "%EMBED_FFMPEG%"=="1" (
+  if exist "%BIN_DIR%\ffmpeg.exe" set "ADD_DATA=--add-data ""%BIN_DIR%;bin"""
+)
+
+echo === Compilando EXE (onefile) ===
+pyinstaller ^
+  --onefile ^
+  --windowed ^
+  --clean ^
+  --name "%APPNAME%" ^
+  --workpath "%BUILD_DIR%" ^
+  --distpath "%DIST_DIR%" ^
+  %ICONARG% ^
+  %ADD_DATA% ^
+  %QT_COLLECT% ^
+  %QT_HIDDEN% ^
+  --noconfirm ^
+  "%SRC_DIR%\%APP_BASENAME%"
+
+if errorlevel 1 (
+  echo [ERROR] PyInstaller falló.
+  pause & exit /b 1
+)
+
+echo [OK] EXE generado: "%DIST_DIR%\%APPNAME%.exe"
+echo.
+
+REM =====================================================
+REM ========== GENERAR .ISS CON RUTAS ABSOLUTAS =========
+REM =====================================================
+set "ISS_FILE=%INSTALLER_DIR%\YouTubeDownloader2.iss"
+echo === Generando .iss con rutas absolutas ===
+
+if "%EMBED_FFMPEG%"=="1" (
+  > "%ISS_FILE%" (
+    echo ; Installer YouTube Downloader 2.0 (EXE + bin\ffmpeg.exe)
+    echo #define MyAppName "%APPNAME%"
+    echo #define MyAppVersion "%APPVERSION%"
+    echo #define MyAppPublisher "%APPPUBLISHER%"
+    echo #define MyAppExeName "%APPNAME%.exe"
+    echo #define MyAppId "youtube-downloader-2-embed"
+    echo [Setup]
+    echo AppId={#MyAppId}
+    echo AppName={#MyAppName}
+    echo AppVersion={#MyAppVersion}
+    echo AppPublisher={#MyAppPublisher}
+    echo DefaultDirName={autopf}\{#MyAppPublisher}\{#MyAppName}
+    echo DefaultGroupName={#MyAppName}
+    echo OutputDir=%INSTALLER_OUT%
+    echo OutputBaseFilename={#MyAppName}-Setup
+    if defined ICON_PATH echo SetupIconFile=%ICON_PATH%
+    echo Compression=lzma
+    echo SolidCompression=yes
+    echo ArchitecturesInstallIn64BitMode=x64
+    echo PrivilegesRequired=admin
+    echo WizardStyle=modern
+    echo UninstallDisplayIcon={app}\{#MyAppExeName}
+    echo [Languages]
+    echo Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+    echo [Files]
+    echo Source: "%DIST_DIR%\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+    echo Source: "%BIN_DIR%\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
+    echo [Icons]
+    echo Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+    echo Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+    echo [Tasks]
+    echo Name: "desktopicon"; Description: "Crear acceso directo en el Escritorio"; GroupDescription: "Tareas adicionales:"; Flags: unchecked
+    echo Name: "launchapp"; Description: "Ejecutar {#MyAppName} al finalizar"; GroupDescription: "Tareas adicionales:"; Flags: unchecked
+    echo [Run]
+    echo Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar {#MyAppName}"; Flags: nowait postinstall skipifsilent; Tasks: launchapp
+  )
+) else (
+  > "%ISS_FILE%" (
+    echo ; Installer YouTube Downloader 2.0 (solo EXE; usa FFmpeg del sistema)
+    echo #define MyAppName "%APPNAME%"
+    echo #define MyAppVersion "%APPVERSION%"
+    echo #define MyAppPublisher "%APPPUBLISHER%"
+    echo #define MyAppExeName "%APPNAME%.exe"
+    echo #define MyAppId "youtube-downloader-2-system"
+    echo [Setup]
+    echo AppId={#MyAppId}
+    echo AppName={#MyAppName}
+    echo AppVersion={#MyAppVersion}
+    echo AppPublisher={#MyAppPublisher}
+    echo DefaultDirName={autopf}\{#MyAppPublisher}\{#MyAppName}
+    echo DefaultGroupName={#MyAppName}
+    echo OutputDir=%INSTALLER_OUT%
+    echo OutputBaseFilename={#MyAppName}-Setup
+    if defined ICON_PATH echo SetupIconFile=%ICON_PATH%
+    echo Compression=lzma
+    echo SolidCompression=yes
+    echo ArchitecturesInstallIn64BitMode=x64
+    echo PrivilegesRequired=admin
+    echo WizardStyle=modern
+    echo UninstallDisplayIcon={app}\{#MyAppExeName}
+    echo [Languages]
+    echo Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+    echo [Files]
+    echo Source: "%DIST_DIR%\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+    echo [Icons]
+    echo Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+    echo Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+    echo [Tasks]
+    echo Name: "desktopicon"; Description: "Crear acceso directo en el Escritorio"; GroupDescription: "Tareas adicionales:"; Flags: unchecked
+    echo Name: "launchapp"; Description: "Ejecutar {#MyAppName} al finalizar"; GroupDescription: "Tareas adicionales:"; Flags: unchecked
+    echo [Run]
+    echo Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar {#MyAppName}"; Flags: nowait postinstall skipifsilent; Tasks: launchapp
+  )
+)
+
+echo [OK] .iss generado: "%ISS_FILE%"
+echo.
+
+REM =====================================================
+REM ================ COMPILAR INSTALADOR ================
+REM =====================================================
+set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+if not exist "%ISCC%" set "ISCC=C:\Program Files\Inno Setup 6\ISCC.exe"
+
+if exist "%ISCC%" (
+  "%ISCC%" "%ISS_FILE%"
+  if errorlevel 1 (
+    echo [ERROR] Fallo compilando el instalador.
+    pause & exit /b 1
+  )
+  echo [OK] Instalador creado en: "%INSTALLER_OUT%"
+) else (
+  echo [ADVERTENCIA] No encuentro ISCC.exe. Abre el .iss y compila manualmente.
+)
+
+echo.
+echo ============ RESUMEN ============
+echo APP:    %APPNAME%  v%APPVERSION%
+echo SRC:    "%SRC_DIR%\%APP_BASENAME%"
+echo ICONO:  "%ICON_PATH%"
+echo EXE:    "%DIST_DIR%\%APPNAME%.exe"
+echo ISS:    "%ISS_FILE%"
+echo SETUP:  "%INSTALLER_OUT%"
+echo =================================
+echo.
+pause
