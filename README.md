@@ -1,1 +1,2 @@
 # DCMD-David-calero-music-downloader-
+Aquí teneís la segunda versión del programa de descarga de música, esta vez he decidido crear una versión más moderna para la interface del software. Como siempre, os voy a dejar subido el proyecto con todos los ficheros. Tambien os he puesto un ejecutable .exe (compilado con hinno setup y con su correspondiente archivo .iss que tiene todo lo necesario para poder instalarlo sin necesidad de tener ni el codigo ni nada más.
